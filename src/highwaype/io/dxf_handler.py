@@ -48,7 +48,7 @@ class RouteCalculator:
 # 2. 自动绘图模块
 # ==========================================
 class AutoPlotter:
-    def __init__(self, dxf_path, centerline_layer="CENTERLINE", standard_frame_margins=[10, 10, 20, 30]):
+    def __init__(self, dxf_path, centerline_layer="CENTERLINE", standard_frame_margins=[10, 10, 20, 30], scale=1200):
         print(f"1. 正在读取源文件: {dxf_path} ...")
         # 步骤 A: 只读读取源文件
         self.doc = ezdxf.readfile(dxf_path)
@@ -58,7 +58,7 @@ class AutoPlotter:
         # A3 设置
         self.paper_width = 420
         self.paper_height = 297
-        self.scale = 1200
+        self.scale = scale
         self.overlap = 0.1
         self.standard_frame_margins = standard_frame_margins
         self.viewport_width = self.paper_width - self.standard_frame_margins[1] - self.standard_frame_margins[3]
