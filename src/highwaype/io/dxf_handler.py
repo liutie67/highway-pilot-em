@@ -279,13 +279,24 @@ class AutoPlotter:
                 viewport = layout.add_viewport(
                     center=vp_center_paper,  # 视口框在“纸上”的位置
                     size=(self.paper_width-2*equal_margin, self.paper_height-2*equal_margin),  # 视口框在“纸上”的大小, 顺序：左下
-                    view_center_point=frame['center'],  # 视口要看“模型空间”里的哪个坐标
+                    # 【关键修改 A】: 告诉 ezdxf，视口的“偏移量”是 0
+                    # 因为我们要让 target 直接对准中心，不需要再偏移了
+                    view_center_point=(0, 0),
                     view_height=(self.paper_height * self.scale) / 1000.0  # 核心：控制出图比例！
                 )
 
                 # ✅ 这里就是你文档里查到的正确属性！
                 # 之前代码失效是因为 DXF 版本太低，而不是名字错了
                 # viewport.dxf.view_twist_angle = twist_degrees
+                target_location = frame['center']  # 视口要看“模型空间”里的哪个坐标
+                # 【关键修改 B】: 把旋转轴心 (Target) 搬到道路中心
+                viewport.dxf.view_target_point = target_location
+                viewport.dxf.view_twist_angle = twist_degrees
+
+                # 【关键修改 C】: 同样把相机位置 (Direction) 搬过来
+                # 这一步是为了保险，让相机看向 Target。如果不设，DXF 有时会默认从原点看过去。
+                # 默认的 view_direction_vector 是 (0, 0, 1) (从顶往下看)，相对坐标，通常不用改。
+                # 但 view_target_point 必须改！
 
                 # 开启并锁定
                 viewport.dxf.status = 1  # 相当于“打开视口”。如果设为 0，视口内是空的，不显示模型空间内容。
