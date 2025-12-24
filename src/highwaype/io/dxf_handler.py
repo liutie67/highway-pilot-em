@@ -81,7 +81,7 @@ class AutoPlotter:
         while current_dist < route.total_length:
             center_point, angle_rad = route.get_info_at(current_dist)
             frames.append({
-                'name': f"A3_Sec_{frame_idx:03d}",
+                'name': f"平面图{frame_idx:03d}",
                 'center': center_point,
                 'rotation': angle_rad,
                 'scale': self.scale
