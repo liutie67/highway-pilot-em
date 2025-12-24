@@ -7,6 +7,8 @@ LIU Tie (2025-12-23)
 # --- 下面才是代码导入部分 ---
 
 from .io.dxf_handler import AutoPlotter
+from .io.excel_handler import  ExcelManager
+from .modules.device_layout import DeviceLayoutEngine
 
 __author__ = 'LIU Tie'
 
