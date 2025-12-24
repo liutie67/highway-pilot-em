@@ -61,6 +61,8 @@ class AutoPlotter:
         self.scale = 1200
         self.overlap = 0.1
         self.standard_frame_margins = standard_frame_margins
+        self.viewport_width = self.paper_width - self.standard_frame_margins[1] - self.standard_frame_margins[3]
+        self.viewport_height = self.paper_height - self.standard_frame_margins[0] - self.standard_frame_margins[2]
 
     def import_frame_block(self, sd_frame_path):
         # 1. 读取图框源文件
@@ -125,7 +127,7 @@ class AutoPlotter:
         frames = []
 
         # 1. 计算图纸覆盖的模型空间宽度
-        model_width = (self.paper_width * self.scale) / 1000.0
+        model_width = (self.viewport_width * self.scale) / 1000.0
 
         # 2. 计算步长 (考虑重叠率)
         step_dist = model_width * (1 - self.overlap)
@@ -173,8 +175,8 @@ class AutoPlotter:
             frame_idx += 1
 
             # 边界检查：如果上一帧已经覆盖到了终点，就结束循环
-            current_dist += step_dist
-            frame_idx += 1
+            if rel_end >= route.total_length:
+                break
 
         return frames
 
@@ -269,9 +271,10 @@ class AutoPlotter:
 
             # vp_center_paper = (self.paper_width / 2 - equal_margin - self.standard_frame_margins[2],
             #                    self.paper_height / 2 - equal_margin - self.standard_frame_margins[3])  # 基于 margins, 左下的长度
-            vp_center_paper =(self.standard_frame_margins[3] + (self.paper_width - self.standard_frame_margins[1] - self.standard_frame_margins[3])/2,
-                              self.standard_frame_margins[2] + (self.paper_height - self.standard_frame_margins[0] - self.standard_frame_margins[2])/2
-                              )
+            vp_center_paper =(
+                self.standard_frame_margins[3] + self.viewport_width/2,
+                self.standard_frame_margins[2] + self.viewport_height/2
+            )
 
             # 步骤 D: 使用正确的属性名 + 正确的数值类型
             # ezdxf 的属性通常接受“度数(Degrees)”，它内部会自动转弧度
