@@ -48,7 +48,7 @@ class RouteCalculator:
 # 2. 自动绘图模块
 # ==========================================
 class AutoPlotter:
-    def __init__(self, dxf_path, centerline_layer="CENTERLINE"):
+    def __init__(self, dxf_path, centerline_layer="CENTERLINE", standard_frame_margins=[10, 10, 20, 30]):
         print(f"1. 正在读取源文件: {dxf_path} ...")
         # 步骤 A: 只读读取源文件
         self.doc = ezdxf.readfile(dxf_path)
@@ -60,6 +60,7 @@ class AutoPlotter:
         self.paper_height = 297
         self.scale = 1200
         self.overlap = 0.1
+        self.standard_frame_margins = standard_frame_margins
 
     def import_frame_block(self, sd_frame_path):
         # 1. 读取图框源文件
@@ -266,7 +267,11 @@ class AutoPlotter:
             # 这个函数会自动查找块定义里的 ATTDEF，并创建对应的 ATTRIB 实体
             frame_blk.add_auto_attribs(values)
 
-            vp_center_paper = (self.paper_width / 2 - equal_margin, self.paper_height / 2 - equal_margin)  # 基于 margins, 左下的长度
+            # vp_center_paper = (self.paper_width / 2 - equal_margin - self.standard_frame_margins[2],
+            #                    self.paper_height / 2 - equal_margin - self.standard_frame_margins[3])  # 基于 margins, 左下的长度
+            vp_center_paper =(self.standard_frame_margins[3] + (self.paper_width - self.standard_frame_margins[1] - self.standard_frame_margins[3])/2,
+                              self.standard_frame_margins[2] + (self.paper_height - self.standard_frame_margins[0] - self.standard_frame_margins[2])/2
+                              )
 
             # 步骤 D: 使用正确的属性名 + 正确的数值类型
             # ezdxf 的属性通常接受“度数(Degrees)”，它内部会自动转弧度
@@ -275,7 +280,8 @@ class AutoPlotter:
             try:
                 viewport = layout.add_viewport(
                     center=vp_center_paper,  # 视口框在“纸上”的位置
-                    size=(self.paper_width-2*equal_margin, self.paper_height-2*equal_margin),  # 视口框在“纸上”的大小, 顺序：左下
+                    size=(self.paper_width-2*equal_margin - self.standard_frame_margins[1] - self.standard_frame_margins[3],
+                          self.paper_height-2*equal_margin - self.standard_frame_margins[0] - self.standard_frame_margins[2]),  # 视口框在“纸上”的大小, 顺序：左下
                     # 【关键修改 A】: 告诉 ezdxf，视口的“偏移量”是 0
                     # 因为我们要让 target 直接对准中心，不需要再偏移了
                     view_center_point=(0, 0),
