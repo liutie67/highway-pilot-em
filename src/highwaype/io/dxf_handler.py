@@ -259,16 +259,17 @@ class AutoPlotter:
 
             layout = self.doc.layouts.new(frame['name'])
 
+            equal_margin = 5
             # 步骤 C: 设置页面显示范围 (解决打开是黑屏的问题)
             layout.page_setup(
                 size=(self.paper_width, self.paper_height),
-                margins=(0, 0, 0, 0),
+                margins=(equal_margin, equal_margin, equal_margin, equal_margin),  # 顺序：顺时针顺序
                 units='mm',
-                offset=(0, 0),
+                offset=(0, 0),  # 顺序：左下
                 rotation=0
             )
 
-            vp_center_paper = (self.paper_width / 2, self.paper_height / 2)
+            vp_center_paper = (self.paper_width / 2 - equal_margin, self.paper_height / 2 - equal_margin)  # 基于 margins, 左下的长度
 
             # 步骤 D: 使用正确的属性名 + 正确的数值类型
             # ezdxf 的属性通常接受“度数(Degrees)”，它内部会自动转弧度
@@ -277,7 +278,7 @@ class AutoPlotter:
             try:
                 viewport = layout.add_viewport(
                     center=vp_center_paper,  # 视口框在“纸上”的位置
-                    size=(self.paper_width, self.paper_height),  # 视口框在“纸上”的大小
+                    size=(self.paper_width-2*equal_margin, self.paper_height-2*equal_margin),  # 视口框在“纸上”的大小, 顺序：左下
                     view_center_point=frame['center'],  # 视口要看“模型空间”里的哪个坐标
                     view_height=(self.paper_height * self.scale) / 1000.0  # 核心：控制出图比例！
                 )
@@ -287,8 +288,12 @@ class AutoPlotter:
                 # viewport.dxf.view_twist_angle = twist_degrees
 
                 # 开启并锁定
-                viewport.dxf.status = 1
-                viewport.dxf.flags = 90
+                viewport.dxf.status = 1  # 相当于“打开视口”。如果设为 0，视口内是空的，不显示模型空间内容。
+                # viewport.dxf.flags = 90
+                # 定义锁定的常量
+                VS_DISPLAY_LOCKED = 16384
+                # 获取当前的 flags，然后加上锁定的 flag
+                viewport.dxf.flags = viewport.dxf.flags | VS_DISPLAY_LOCKED
 
             except Exception as e:
                 print(f"视口创建失败 {frame['name']}: {e}")
