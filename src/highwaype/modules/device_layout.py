@@ -339,6 +339,44 @@ class DeviceLayoutEngine:
         # 使得文字平行于道路
         return target_angle
 
+    def find_best_viewport_rotation(self, x, y, index=0):
+        p_target = Vec2(x, y)
+        best_twist = 0.0
+        min_dist_to_center = float('inf')
+        found = False
+
+        for layout in self.doc.layouts:
+            if layout.name == 'Model' or layout.name == '布局1': continue
+            for entity in layout:
+                if entity.dxftype() != 'VIEWPORT': continue
+
+                vp = entity
+                center = Vec2(vp.dxf.view_target_point)
+                height = vp.dxf.view_height
+                twist_deg = vp.dxf.view_twist_angle
+                twist_rad = math.radians(twist_deg)
+                width = height * (vp.dxf.width / vp.dxf.height)
+
+                # 判定包含
+                rel = (p_target - center).rotate(-twist_rad)
+                if abs(rel.x) <= width / 2 and abs(rel.y) <= height / 2:
+                    # 计算到中心的距离
+                    dist = p_target.distance(center)
+
+                    # 择优录取：选离中心最近的那个视口
+                    if dist < min_dist_to_center:
+                        min_dist_to_center = dist
+                        best_twist = twist_deg
+                        found = True
+
+        if found:
+            return -best_twist
+
+        # 兜底：如果没找到视口，回退到使用道路切线，保证至少有个角度
+        print(f" -{index}- : ⚠️ 坐标 ({x:.1f}, {y:.1f}) 不在视口内，回退到道路切线方向。")
+        # 这里你需要调用一下之前的逻辑或者默认返回 0
+        return 0.0
+
     # 2. 新增核心方法：绘制图例和标注
     def draw_legends(self, devices, legend_source_file=None, legend_layer_color=6, legend_scale=3.5):
         """
@@ -366,8 +404,9 @@ class DeviceLayoutEngine:
             # 道路切线角度是 road_angle。
             # 布局旋转了 -road_angle。
             # 所以模型空间里的物体如果旋转 road_angle，在布局里就是水平的。
-            road_angle_rad = self._get_layout_rotation(dev.station_val)
-            rotation_deg = math.degrees(road_angle_rad)
+            viewport_twist_deg = self.find_best_viewport_rotation(dev.x, dev.y, dev.index)
+            viewport_twist_rad = math.radians(viewport_twist_deg)
+            road_tangent_rad = self._get_layout_rotation(dev.station_val)
 
             # 2. 计算引线避让位置
             # 策略：根据设备在左侧还是右侧，决定引线向外延伸的方向
@@ -378,24 +417,26 @@ class DeviceLayoutEngine:
             # 计算垂直于道路方向的向量 (法向量)
             # 道路向量 (cos, sin)
             # 左侧法向量 (-sin, cos), 右侧法向量 (sin, -cos)
-            if dev.side == "左幅外侧" or dev.side == "Left":
-                normal_vec = Vec2(-math.sin(road_angle_rad), math.cos(road_angle_rad))
+            if dev.side in ["左幅外侧", "Left", "Left"]:
+                leader_angle_rad = road_tangent_rad + (math.pi / 2)
             else:
-                normal_vec = Vec2(math.sin(road_angle_rad), -math.cos(road_angle_rad))
+                leader_angle_rad = road_tangent_rad - (math.pi / 2)
+
+            lead_vec = Vec2.from_angle(leader_angle_rad)
 
             # 设备坐标
             p_dev = Vec2(dev.x, dev.y)
 
             # 图例插入点 (引线末端)
-            p_legend = p_dev + normal_vec * lead_dist
+            p_legend = p_dev + lead_vec * lead_dist
 
             # 简单避让逻辑：如果和上一个太近，就再往外推或者沿道路方向错开
             # 这里暂时只做简单的垂直引出，复杂的力导向需要迭代计算
 
             # 3. 插入图例块
             legend_block_name = f"{dev.name_str}_TL"  # 约定后缀
-
             block_width = 5.0 * legend_scale
+
             # 检查块是否存在，不存在则用默认块或跳过
             if legend_block_name not in self.doc.blocks:
                 print(f"警告: 未找到图例块 {legend_block_name}，跳过图例绘制。")
@@ -408,7 +449,7 @@ class DeviceLayoutEngine:
                     insert=p_legend,
                     dxfattribs={
                         'layer': layer_name,
-                        'rotation': rotation_deg,  # 跟随道路方向旋转
+                        'rotation': viewport_twist_deg,
                         'xscale': legend_scale,  # X轴缩放
                         'yscale': legend_scale,  # Y轴缩放
                         'zscale': legend_scale,  # Z轴缩放 (2D绘图通常也设为一致，或者1.0)
@@ -440,7 +481,7 @@ class DeviceLayoutEngine:
 
                 # 5. 【关键】跟随道路旋转
                 # 将这个偏移向量旋转到道路的角度
-                vec_final_offset = vec_total_offset.rotate(road_angle_rad)
+                vec_final_offset = vec_total_offset.rotate(viewport_twist_rad)   # !!!
 
                 # 6. 计算最终的世界坐标
                 p_text = p_legend + vec_final_offset
@@ -471,7 +512,7 @@ class DeviceLayoutEngine:
                     'layer': layer_name,
                     'char_height': text_h,
                     'style': 'LegendTextStyle',
-                    'rotation': rotation_deg,  # 旋转文字
+                    # 'rotation': rotation_deg,  # 旋转文字
                 }
             )
 
@@ -493,7 +534,7 @@ class DeviceLayoutEngine:
             # 简单做法：文字放在图例引线末端旁边
             mtext.set_location(
                 insert=p_text,  # 稍微往"上"偏一点
-                rotation=rotation_deg,
+                rotation=viewport_twist_deg,
                 attachment_point=4
             )
 
