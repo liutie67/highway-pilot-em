@@ -18,7 +18,7 @@ class DeviceRecord:
     y: float
 
 
-class RouteCalculator:
+class LegacyRouteCalculator:
     """
     核心路由计算器 (升级版)
     增加了 project_point 方法：将任意坐标投影到中心线上，获取桩号和偏距
@@ -99,6 +99,97 @@ class RouteCalculator:
         return best_station, min_dist, best_side
 
 
+class RouteCalculator:
+    """
+    核心路由计算器 (定距逻辑版 - 修复 Vec2 属性报错)
+    """
+
+    def __init__(self, entity, start_PK="K0+000"):
+        # 0. 解析起始桩号
+        self.base_offset = self._parse_pk_string(start_PK)
+
+        # 1. 提取顶点
+        raw_points = []
+        if entity.dxftype() == 'LWPOLYLINE':
+            raw_points = entity.get_points(format='xy')
+        elif entity.dxftype() == 'LINE':
+            raw_points = [entity.dxf.start, entity.dxf.end]
+        else:
+            raise TypeError("RouteCalculator 输入必须是 LWPOLYLINE 或 LINE")
+
+        # 2. 预计算每一段
+        self.segments = []
+
+        for i in range(len(raw_points) - 1):
+            # 强制转为 Vec2
+            p_prev = Vec2(raw_points[i])
+            p_curr = Vec2(raw_points[i + 1])
+
+            vec = p_curr - p_prev
+
+            # --- 核心修复：手动计算长度平方 ---
+            # 某些版本的 ezdxf Vec2 没有 magnitude_sq 属性
+            # 我们直接用 x*x + y*y 代替，效果完全一样且更快
+            len_sq = vec.x * vec.x + vec.y * vec.y
+
+            start_stat = self.base_offset + (i * 100.0)
+
+            self.segments.append({
+                'p1': p_prev,
+                'p2': p_curr,
+                'vec': vec,
+                'len_sq': len_sq,  # <--- 这里使用了修复后的变量
+                'start_stat': start_stat,
+                'logic_span': 100.0
+            })
+
+        self.total_length = self.segments[-1]['start_stat'] + 100.0
+
+    def _parse_pk_string(self, pk_str):
+        if isinstance(pk_str, (int, float)):
+            return float(pk_str)
+        clean_str = pk_str.upper().replace('K', '').replace(' ', '')
+        if '+' in clean_str:
+            try:
+                parts = clean_str.split('+')
+                return float(parts[0]) * 1000 + float(parts[1])
+            except ValueError:
+                return 0.0
+        try:
+            return float(clean_str)
+        except ValueError:
+            return 0.0
+
+    def project_point(self, target_point: Vec2):
+        min_dist = float('inf')
+        best_station = 0.0
+        best_side = "Center"
+
+        for seg in self.segments:
+            p1 = seg['p1']
+            vec_seg = seg['vec']
+            seg_len_sq = seg['len_sq']
+
+            if seg_len_sq == 0:
+                t_clamped = 0.0
+            else:
+                vec_pt = target_point - p1
+                # 向量点积：x1*x2 + y1*y2
+                t = vec_pt.dot(vec_seg) / seg_len_sq
+                t_clamped = max(0.0, min(1.0, t))
+
+            projected_p = p1 + vec_seg * t_clamped
+            dist = target_point.distance(projected_p)
+
+            if dist < min_dist:
+                min_dist = dist
+                best_station = seg['start_stat'] + (t_clamped * seg['logic_span'])
+                cross_product = vec_seg.x * vec_pt.y - vec_seg.y * vec_pt.x
+                best_side = "左幅外侧" if cross_product > 0 else "右幅外侧"
+
+        return best_station, min_dist, best_side
+
+
 class DeviceLayoutEngine:
     def __init__(self, dxf_path, centerline_layer="ROAD_CENTER"):
         print(f"正在加载 CAD 文件: {dxf_path} ...")
@@ -114,8 +205,6 @@ class DeviceLayoutEngine:
         """获取中心线并构建计算器"""
         polylines = self.msp.query(f'LWPOLYLINE[layer=="{self.centerline_layer}"]')
         if not polylines:
-            lines = self.msp.query(f'LINE[layer=="{self.centerline_layer}"]')
-            if lines: return RouteCalculator(lines[0])  # 简化处理
             raise ValueError(f"未找到中心线图层: {self.centerline_layer}")
 
         # 取最长的一条
