@@ -1,8 +1,11 @@
 import math
 import ezdxf
 import ezdxf.path
+from ezdxf.addons import Importer
 from ezdxf.math import Vec2
 from dataclasses import dataclass
+# 增加文字对齐枚举
+from ezdxf.enums import TextEntityAlignment
 
 
 # 定义一个简单的设备数据结构
@@ -10,6 +13,7 @@ from dataclasses import dataclass
 class DeviceRecord:
     index: int
     name: str  # 块名
+    name_str: str
     station_str: str  # 格式化桩号 (K12+345)
     station_val: float  # 数值桩号 (12345.0)
     side: str  # Left / Right
@@ -201,6 +205,15 @@ class DeviceLayoutEngine:
         self.route = self._init_route()
         print(f"中心线解析完成，全长: {self.route.total_length:.2f}m")
 
+        # 确保标注字体样式存在
+        if 'LegendTextStyle' not in self.doc.styles:
+            # doc.styles.new('DimStyle', dxfattribs={'font': '仿宋_GB2312.ttf'})
+            self.doc.styles.new('LegendTextStyle', dxfattribs={
+                'font': '宋体.ttf',
+                # 'font': '仿宋_GB2312.ttf',
+                'width': 0.75
+            })
+
     def _init_route(self):
         """获取中心线并构建计算器"""
         polylines = self.msp.query(f'LWPOLYLINE[layer=="{self.centerline_layer}"]')
@@ -247,6 +260,7 @@ class DeviceLayoutEngine:
             rec = DeviceRecord(
                 index=index,
                 name=target_block_names[block_name],
+                name_str=block_name,
                 station_str=self.format_station(station),
                 station_val=station,
                 side=side,
@@ -266,3 +280,164 @@ class DeviceLayoutEngine:
 
         print(f"✅ 处理完成，共提取有效设备 {len(devices)} 个")
         return devices
+
+    # 1. 新增辅助方法：计算布局旋转角度
+    def _get_layout_rotation(self, station_val):
+        """
+        根据桩号获取该点位所在布局视口的旋转角度。
+        逻辑：复用之前的 RouteCalculator 逻辑，获取该桩号处的道路切线角度。
+        为了在布局里看着是正的，模型空间里的文字需要旋转 -tangent_angle。
+        """
+        # 注意：这里需要 RouteCalculator 提供一个 get_direction_at(station) 方法
+        # 如果 RouteCalculator 没有，我们需要简单实现一个
+        # 简单起见，我们重新计算一下该桩号在 Route 上的切线
+
+        # 使用 RouteCalculator 的内部数据寻找切线
+        # 这是一个简化的查找，假设 route.segments 已经按桩号排序
+        target_angle = 0.0
+        for seg in self.route.segments:
+            if seg['start_stat'] <= station_val <= (seg['start_stat'] + seg['logic_span']):
+                # 找到了所在段，计算该段的向量角度
+                vec = seg['vec']
+                target_angle = vec.angle  # 弧度
+                break
+
+        # 布局视口通常旋转 -target_angle 变平
+        # 所以为了让文字在布局里水平，文字在模型空间应该旋转 target_angle (或者 target_angle + pi)
+        # 使得文字平行于道路
+        return target_angle
+
+    # 2. 新增核心方法：绘制图例和标注
+    def draw_legends(self, devices, legend_source_file=None):
+        """
+        :param devices: extract_and_project_devices 返回的列表
+        :param legend_source_file: 包含图例块的外部 DXF 文件路径。如果为 None，假设当前文件已有块。
+        """
+        print(f"正在绘制 {len(devices)} 个设备的图例注记...")
+
+        needed_blocks = []
+        for dev in devices:
+            needed_blocks.append(f"{dev.name_str}_TL")
+
+        # 如果提供了外部图例文件，需要先导入块定义
+        if legend_source_file:
+            self._import_blocks(legend_source_file, needed_blocks)
+
+        # 标注图层
+        layer_name = "DEVICE_LEGEND"
+        if layer_name not in self.doc.layers:
+            self.doc.layers.add(name=layer_name, color=7)  # 白色
+
+        for dev in devices:
+            # 1. 确定旋转角度
+            # 我们希望文字和图例在布局里是正的。
+            # 道路切线角度是 road_angle。
+            # 布局旋转了 -road_angle。
+            # 所以模型空间里的物体如果旋转 road_angle，在布局里就是水平的。
+            road_angle_rad = self._get_layout_rotation(dev.station_val)
+            rotation_deg = math.degrees(road_angle_rad)
+
+            # 2. 计算引线避让位置
+            # 策略：根据设备在左侧还是右侧，决定引线向外延伸的方向
+            # 左侧设备向左引，右侧设备向右引
+            # 初始引线长度 10m (根据实际单位调整，如果是mm则是10000)
+            lead_dist = 15.0  # if self.route.segments[0]['len_sq'] < 10000 else 15000.0
+
+            # 计算垂直于道路方向的向量 (法向量)
+            # 道路向量 (cos, sin)
+            # 左侧法向量 (-sin, cos), 右侧法向量 (sin, -cos)
+            if dev.side == "左幅外侧" or dev.side == "Left":
+                normal_vec = Vec2(-math.sin(road_angle_rad), math.cos(road_angle_rad))
+            else:
+                normal_vec = Vec2(math.sin(road_angle_rad), -math.cos(road_angle_rad))
+
+            # 设备坐标
+            p_dev = Vec2(dev.x, dev.y)
+
+            # 图例插入点 (引线末端)
+            p_legend = p_dev + normal_vec * lead_dist
+
+            # 简单避让逻辑：如果和上一个太近，就再往外推或者沿道路方向错开
+            # 这里暂时只做简单的垂直引出，复杂的力导向需要迭代计算
+
+            # 3. 插入图例块
+            legend_block_name = f"{dev.name_str}_TL"  # 约定后缀
+
+            # 检查块是否存在，不存在则用默认块或跳过
+            if legend_block_name not in self.doc.blocks:
+                print(f"警告: 未找到图例块 {legend_block_name}，跳过图例绘制。")
+                # 也可以画个圆圈代替
+                self.msp.add_circle(p_legend, radius=2, dxfattribs={'layer': layer_name, 'color': 1})
+            else:
+                self.msp.add_blockref(
+                    name=legend_block_name,
+                    insert=p_legend,
+                    dxfattribs={
+                        'layer': layer_name,
+                        'rotation': rotation_deg  # 跟随道路方向旋转
+                    }
+                )
+
+            # 4. 绘制引线 (连接设备点和图例点)
+            self.msp.add_line(p_dev, p_legend, dxfattribs={'layer': layer_name, 'color': 252})  # 灰色线
+
+            # 5. 添加多行文字信息
+            # 文字内容
+            content = (
+                f"名称: {dev.name}\n"
+                f"桩号: {dev.station_str}\n"
+                f"位置: {dev.side}\n"
+                f"基础: 路基"
+            )
+
+            # 文字位置：在图例块旁边
+            # 继续沿法向量向外偏移一点，或者沿道路方向偏移
+            text_offset_dist = 5.0 if lead_dist < 100 else 5000.0
+            p_text = p_legend + normal_vec * (text_offset_dist * 0.2)
+
+            # 计算文字高度 (根据单位)
+            text_h = 10 if lead_dist < 100 else 2000.0
+
+            # 创建 MTEXT
+            mtext = self.msp.add_mtext(
+                content,
+                dxfattribs={
+                    'layer': layer_name,
+                    'char_height': text_h,
+                    'style': 'LegendTextStyle',
+                    'rotation': rotation_deg,  # 旋转文字
+                }
+            )
+
+            # 设置文字对齐和附着点
+            # 这里的逻辑：左侧设备文字在左边右对齐，右侧设备文字在右边左对齐
+            # 还需要考虑旋转后的相对位置，稍微复杂
+            # 简化方案：统一放在图例上方或下方
+
+            # 使用 set_location 设置对齐
+            # attachment_point: 1=TopLeft, 2=TopCenter, 3=TopRight ...
+            # 我们可以让文字始终相对于图例“竖直向上”排列（相对于旋转后的坐标系）
+
+            # 计算文字框的偏移向量 (垂直于道路，平行于道路)
+            # 这里直接设置位置即可，ezdxf 会处理旋转
+
+            # 为了美观，我们把文字放在图例块的"上方" (相对于布局图纸的上方)
+            # 布局的"上方"就是道路法线指向路外的反方向吗？不，是垂直于道路切线的方向。
+
+            # 简单做法：文字放在图例引线末端旁边
+            mtext.set_location(
+                insert=p_legend + Vec2(0, text_h * 1.5).rotate(road_angle_rad),  # 稍微往"上"偏一点
+                rotation=rotation_deg,
+                attachment_point=7  # BottomLeft
+            )
+
+    def _import_blocks(self, source_dxf_path, needed_blocks):
+        """从外部文件导入图例块"""
+        try:
+            source_doc = ezdxf.readfile(source_dxf_path)
+            importer = Importer(source_doc, self.doc)
+            # 导入所有块
+            importer.import_blocks(needed_blocks)
+            importer.finalize()
+        except Exception as e:
+            print(f"导入图块失败: {e}")
