@@ -3,6 +3,7 @@ import ezdxf
 import ezdxf.path
 from ezdxf.addons import Importer
 from ezdxf.math import Vec2
+import ezdxf.bbox
 from dataclasses import dataclass
 # 增加文字对齐枚举
 from ezdxf.enums import TextEntityAlignment
@@ -308,7 +309,7 @@ class DeviceLayoutEngine:
         return target_angle
 
     # 2. 新增核心方法：绘制图例和标注
-    def draw_legends(self, devices, legend_source_file=None, legend_layer_color=6, lengend_scale=3.5):
+    def draw_legends(self, devices, legend_source_file=None, legend_layer_color=6, legend_scale=3.5):
         """
         :param devices: extract_and_project_devices 返回的列表
         :param legend_source_file: 包含图例块的外部 DXF 文件路径。如果为 None，假设当前文件已有块。
@@ -341,7 +342,7 @@ class DeviceLayoutEngine:
             # 策略：根据设备在左侧还是右侧，决定引线向外延伸的方向
             # 左侧设备向左引，右侧设备向右引
             # 初始引线长度 10m (根据实际单位调整，如果是mm则是10000)
-            lead_dist = 15.0  # if self.route.segments[0]['len_sq'] < 10000 else 15000.0
+            lead_dist = 15.0 * 8  # if self.route.segments[0]['len_sq'] < 10000 else 15000.0
 
             # 计算垂直于道路方向的向量 (法向量)
             # 道路向量 (cos, sin)
@@ -363,11 +364,13 @@ class DeviceLayoutEngine:
             # 3. 插入图例块
             legend_block_name = f"{dev.name_str}_TL"  # 约定后缀
 
+            block_width = 5.0 * legend_scale
             # 检查块是否存在，不存在则用默认块或跳过
             if legend_block_name not in self.doc.blocks:
                 print(f"警告: 未找到图例块 {legend_block_name}，跳过图例绘制。")
                 # 也可以画个圆圈代替
                 self.msp.add_circle(p_legend, radius=2, dxfattribs={'layer': layer_name, 'color': 1})
+                p_text = p_legend
             else:
                 self.msp.add_blockref(
                     name=legend_block_name,
@@ -375,15 +378,47 @@ class DeviceLayoutEngine:
                     dxfattribs={
                         'layer': layer_name,
                         'rotation': rotation_deg,  # 跟随道路方向旋转
-                        # ---在这里控制缩放---
-                        'xscale': lengend_scale,  # X轴缩放
-                        'yscale': lengend_scale,  # Y轴缩放
-                        'zscale': lengend_scale,  # Z轴缩放 (2D绘图通常也设为一致，或者1.0)
+                        'xscale': legend_scale,  # X轴缩放
+                        'yscale': legend_scale,  # Y轴缩放
+                        'zscale': legend_scale,  # Z轴缩放 (2D绘图通常也设为一致，或者1.0)
                     }
                 )
 
+                # --- 计算包围盒宽度 (Bounding Box) ---
+                # 获取块定义
+                block_def = self.doc.blocks.get(legend_block_name)
+                # 计算该块定义的几何包围盒 (本地坐标)
+                extents = ezdxf.bbox.extents(block_def)
+
+                # 2. 获取右侧边框中点的【局部坐标】
+                # 右侧边界的X值 = extmax.x
+                # 上下边界的中心Y值 = center.y
+                local_right_mid_x = extents.extmax.x
+                local_right_mid_y = extents.center.y
+
+                # 3. 转换为向量 (相对于图块原点 0,0)
+                # 并加上缩放比例 (legend_scale)
+                # 这一步得到了图块在"未旋转"状态下，边缘相对于插入点的距离向量
+                vec_to_right_edge = Vec2(local_right_mid_x, local_right_mid_y) * legend_scale
+
+                # 4. 加上文字间隙 (Gap)
+                # 我们希望文字离方框还有一点距离 (例如 2.0 单位)
+                gap = 2.0 * legend_scale
+                # 将间隙加在 X 轴方向上
+                vec_total_offset = vec_to_right_edge + Vec2(gap, 0)
+
+                # 5. 【关键】跟随道路旋转
+                # 将这个偏移向量旋转到道路的角度
+                vec_final_offset = vec_total_offset.rotate(road_angle_rad)
+
+                # 6. 计算最终的世界坐标
+                p_text = p_legend + vec_final_offset
+
             # 4. 绘制引线 (连接设备点和图例点)
-            self.msp.add_line(p_dev, p_legend, dxfattribs={'layer': layer_name, 'color': 252})  # 灰色线
+            self.msp.add_line(p_dev, p_legend, dxfattribs={
+                'layer': layer_name,
+                'color': legend_layer_color,
+            })
 
             # 5. 添加多行文字信息
             # 文字内容
@@ -394,13 +429,8 @@ class DeviceLayoutEngine:
                 f"基础: 路基"
             )
 
-            # 文字位置：在图例块旁边
-            # 继续沿法向量向外偏移一点，或者沿道路方向偏移
-            text_offset_dist = 5.0 if lead_dist < 100 else 5000.0
-            p_text = p_legend + normal_vec * (text_offset_dist * 0.2)
-
             # 计算文字高度 (根据单位)
-            text_h = 10 if lead_dist < 100 else 2000.0
+            text_h = 10
 
             # 创建 MTEXT
             mtext = self.msp.add_mtext(
@@ -430,9 +460,9 @@ class DeviceLayoutEngine:
 
             # 简单做法：文字放在图例引线末端旁边
             mtext.set_location(
-                insert=p_legend + Vec2(0, text_h * 1.5).rotate(road_angle_rad),  # 稍微往"上"偏一点
+                insert=p_text,  # 稍微往"上"偏一点
                 rotation=rotation_deg,
-                attachment_point=7  # BottomLeft
+                attachment_point=4
             )
 
     def _import_blocks(self, source_dxf_path, needed_blocks):
