@@ -308,7 +308,7 @@ class DeviceLayoutEngine:
         return target_angle
 
     # 2. 新增核心方法：绘制图例和标注
-    def draw_legends(self, devices, legend_source_file=None):
+    def draw_legends(self, devices, legend_source_file=None, legend_layer_color=6, lengend_scale=3.5):
         """
         :param devices: extract_and_project_devices 返回的列表
         :param legend_source_file: 包含图例块的外部 DXF 文件路径。如果为 None，假设当前文件已有块。
@@ -326,7 +326,7 @@ class DeviceLayoutEngine:
         # 标注图层
         layer_name = "DEVICE_LEGEND"
         if layer_name not in self.doc.layers:
-            self.doc.layers.add(name=layer_name, color=7)  # 白色
+            self.doc.layers.add(name=layer_name, color=legend_layer_color)  # 白色
 
         for dev in devices:
             # 1. 确定旋转角度
@@ -374,7 +374,11 @@ class DeviceLayoutEngine:
                     insert=p_legend,
                     dxfattribs={
                         'layer': layer_name,
-                        'rotation': rotation_deg  # 跟随道路方向旋转
+                        'rotation': rotation_deg,  # 跟随道路方向旋转
+                        # ---在这里控制缩放---
+                        'xscale': lengend_scale,  # X轴缩放
+                        'yscale': lengend_scale,  # Y轴缩放
+                        'zscale': lengend_scale,  # Z轴缩放 (2D绘图通常也设为一致，或者1.0)
                     }
                 )
 
