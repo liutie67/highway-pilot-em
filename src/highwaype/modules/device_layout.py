@@ -17,6 +17,7 @@ class DeviceRecord:
     name_str: str
     station_str: str  # 格式化桩号 (K12+345)
     station_val: float  # 数值桩号 (12345.0)
+    base_type: str  # 基础类型
     side: str  # Left / Right
     offset: float  # 距离中心线的距离
     x: float
@@ -111,7 +112,7 @@ class RouteCalculator:
 
     def __init__(self, entity, start_PK="K0+000"):
         # 0. 解析起始桩号
-        self.base_offset = self._parse_pk_string(start_PK)
+        self.base_offset = self.parse_pk_string(start_PK)
 
         # 1. 提取顶点
         raw_points = []
@@ -150,7 +151,8 @@ class RouteCalculator:
 
         self.total_length = self.segments[-1]['start_stat'] + 100.0
 
-    def _parse_pk_string(self, pk_str):
+    @staticmethod
+    def parse_pk_string(pk_str):
         if isinstance(pk_str, (int, float)):
             return float(pk_str)
         clean_str = pk_str.upper().replace('K', '').replace(' ', '')
@@ -196,15 +198,31 @@ class RouteCalculator:
 
 
 class DeviceLayoutEngine:
-    def __init__(self, dxf_path, centerline_layer="ROAD_CENTER"):
+    def __init__(self, dxf_path, briges_list, centerline_layer="ROAD_CENTER"):
         print(f"正在加载 CAD 文件: {dxf_path} ...")
         self.doc = ezdxf.readfile(dxf_path)
         self.msp = self.doc.modelspace()
         self.centerline_layer = centerline_layer
-
         # 初始化路由计算器
         self.route = self._init_route()
         print(f"中心线解析完成，全长: {self.route.total_length:.2f}m")
+
+        # --- 新增逻辑：预处理桥梁列表 ---
+        # 将 [('K2+968.2', 'K3+94')] 转换为 [(2968.2, 3094.0)
+        self.bridge_ranges = []
+        for start_str, end_str in briges_list:
+            # 复用 RouteCalculator 中的 _parse_pk_string 方法
+            # 注意：如果 _parse_pk_string 是私有方法(带下划线)，但在 Python 中可以这样调用
+            # 或者你可以把那个解析函数提取为静态方法
+            s_val = self.route.parse_pk_string(start_str)
+            e_val = self.route.parse_pk_string(end_str)
+
+            # 确保 start <= end，防止输入反了
+            if s_val > e_val:
+                s_val, e_val = e_val, s_val
+            self.bridge_ranges.append((s_val, e_val))
+
+        print(f"已加载 {len(self.bridge_ranges)} 座桥梁范围用于基础类型判断。")
 
         # 确保标注字体样式存在
         if 'LegendTextStyle' not in self.doc.styles:
@@ -257,6 +275,18 @@ class DeviceLayoutEngine:
             # --- 核心调用：投影计算 ---
             station, offset, side = self.route.project_point(insert_pos)
 
+            # --- 新增逻辑：判断基础类型 (Bridge vs Road) ---
+            # 默认为路基
+            current_base_type = 'Road'
+
+            # 遍历所有桥梁范围进行比对
+            for b_start, b_end in self.bridge_ranges:
+                # 判断当前桩号是否在桥梁范围内
+                # 使用 <= 可以包含边界，根据具体业务需求调整
+                if b_start <= station <= b_end:
+                    current_base_type = 'Bridge'  # 拼写更正为 Bridge (桥梁)
+                    break  # 找到所在桥梁后，无需继续遍历
+
             # 记录数据
             rec = DeviceRecord(
                 index=index,
@@ -264,6 +294,7 @@ class DeviceLayoutEngine:
                 name_str=block_name,
                 station_str=self.format_station(station),
                 station_val=station,
+                base_type=current_base_type,
                 side=side,
                 offset=round(offset, 3),  # 保留3位小数
                 x=round(insert_pos.x, 3),
@@ -420,13 +451,14 @@ class DeviceLayoutEngine:
                 'color': legend_layer_color,
             })
 
+            bt = '路基' if dev.base_type == 'Road' else '桥梁'
             # 5. 添加多行文字信息
             # 文字内容
             content = (
                 f"名称: {dev.name}\n"
                 f"桩号: {dev.station_str}\n"
                 f"位置: {dev.side}\n"
-                f"基础: 路基"
+                f"基础: {bt}"
             )
 
             # 计算文字高度 (根据单位)
