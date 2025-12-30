@@ -118,7 +118,7 @@ class FrameAutoNumberer:
 
         return sorted_frames
 
-    def renumber_and_save(self, output_path: Union[str, Path], x_restrict: Optional[float] = None,
+    def renumber_and_save(self, output_path: Union[str, Path], x_restrict: Optional[float] = None, start: Optional[int] = 2,
                           y_tolerance: float = 1.0):
         """
         执行编号逻辑并保存文件。
@@ -132,6 +132,8 @@ class FrameAutoNumberer:
             修改后的 DXF 文件保存路径。
         x_restrict : float, optional
             X 坐标起始限制。如果设置，只修改 X > x_restrict 的图框。默认为 None。
+        start : int, optional
+            编号的起始号。
         y_tolerance : float, optional
             行对齐容差，用于模糊匹配 Y 坐标。默认为 1.0。
 
@@ -144,7 +146,7 @@ class FrameAutoNumberer:
         sorted_entities = self._get_sorted_frames(x_restrict, y_tolerance)
 
         count = 0
-        for idx, entity in enumerate(sorted_entities, start=1):
+        for idx, entity in enumerate(sorted_entities, start=start):
 
             # --- 修复点 2: 移除 get_attrib 调用，改为手动遍历 ---
             # 为了兼容不同版本的 ezdxf，直接遍历查找是最安全的方法
@@ -171,8 +173,8 @@ class FrameAutoNumberer:
 
 if __name__ == "__main__":
     # 测试用例
-    input_file = "test_drawing.dxf"
-    output_file = "test_drawing_numbered.dxf"
+    input_file = "drawing.dxf"
+    output_file = "drawing-numbered.dxf"
 
     # 模拟文件存在性检查
     if Path(input_file).exists():
@@ -183,7 +185,8 @@ if __name__ == "__main__":
         processed_count = renumberer.renumber_and_save(
             output_path=output_file,
             x_restrict=500,
-            y_tolerance=1.0
+            y_tolerance=1.0,
+            start=2,
         )
     else:
         print(f"请准备测试文件: {input_file}")
